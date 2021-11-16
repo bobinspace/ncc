@@ -6,7 +6,10 @@
 #include <netdb.h>
 #include <sys/epoll.h>
 #include <stdio.h>
-#include "logging.h"
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 
 bool BindOrConnect(char const * const hostname, const unsigned short port, const bool should_bind_instead_of_connect, int& fd) {
     fd = -1;
@@ -96,6 +99,9 @@ bool CreateAndListenOnNonBlockingSocket(const unsigned short listening_port, con
         ::close(fd_listening);
         return false;
     }
+
+    DisableNaglesAlgorithm(fd_listening);
+
     log::PrintLn(log::Info, "%d|Listening on port %d", fd_listening, listening_port);
     return true;
 }
@@ -161,4 +167,24 @@ void EpollEventsToString(const uint32_t events, char* const events_string, const
             offset += EpollEventToString(event, events_string + offset, n - offset);
         }
     }
+}
+
+int DisableNaglesAlgorithm(const int fd) {
+    const int option_value = 1;
+    return SetSocketOption(fd, TCP_NODELAY, option_value);
+}
+    
+SocketIOStatus SummariseSocketIOStatus(const int num_desired_io_bytes_passed_to_socket_api, const int socket_api_call_return_value, const int socket_api_call_errno) {
+    if (socket_api_call_return_value < 0) {
+        if ((EAGAIN == socket_api_call_errno) && (EWOULDBLOCK == socket_api_call_errno)) {
+            return WouldBlock;
+        }
+        // Every other kind of error we treat as a disconnection
+        return PeerHungUp;
+    }
+    else if (socket_api_call_return_value == 0) {
+        return (num_desired_io_bytes_passed_to_socket_api > 0) ? PeerHungUp : WentThrough;
+    }
+
+    return WentThrough;
 }

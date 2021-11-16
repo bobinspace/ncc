@@ -14,7 +14,7 @@ EpollController::~EpollController() {
     }
 }
 
-// 0 on success, or �1 on error
+// 0 on success, or 1 on error
 int EpollController::AddToInterestList(const int fd_of_interest, const uint32_t events_of_interest) {
     std::lock_guard<std::mutex> lock(mutex_);
     epoll_event event = { 0 };
@@ -51,8 +51,10 @@ bool EpollController::ModifyInterestList(const int fd_of_interest, const uint32_
         return false;
     }
     const bool is_already_in_desired_state = 
-        (existing_registered_events & events_of_interest_to_add) 
-        && (!(existing_registered_events & events_of_interest_to_remove));
+        ((0 == events_of_interest_to_add) || (existing_registered_events & events_of_interest_to_add))
+        && ((0 == events_of_interest_to_remove) || (!(existing_registered_events & events_of_interest_to_remove)));
+
+    log::PrintLn(log::Debug, "%d|?|existing=%08x add=%08x del=%08x nochg=%d", fd_of_interest, existing_registered_events, events_of_interest_to_add, events_of_interest_to_remove, is_already_in_desired_state);
     if (is_already_in_desired_state) return true;
 
     epoll_event event = { 0 };

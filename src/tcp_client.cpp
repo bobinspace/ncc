@@ -53,6 +53,8 @@ int RunTCPClient(const ClientConfig& config) {
         close(fd);
         return -1;
     }
+    
+    DisableNaglesAlgorithm(fd);
 
     Session session(fd, config.read_threshold, config.write_threshold);
     

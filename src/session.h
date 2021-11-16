@@ -10,6 +10,7 @@
 #include "socket_writer.h"
 #include "ack_maker_and_serialiser.h"
 #include "io_benchmark.h"
+#include "socket_utils.h"
 
 struct Session {
     int fd;
@@ -100,13 +101,11 @@ public:
 };
 
 template<typename Deserialiser, typename StreamReader, typename FrameHandler>
-bool GetDataThenDeserialise(Deserialiser& deserialiser, StreamReader& stream_reader, const size_t read_threshold, FrameHandler& frame_handler) {
+SocketIOStatus GetDataThenDeserialise(Deserialiser& deserialiser, StreamReader& stream_reader, const size_t read_threshold, FrameHandler& frame_handler) {
     deserialiser.AppendStream(stream_reader, read_threshold);
 
-    if (stream_reader.last_status <= 0) {
-        return false;
-    }
+    const SocketIOStatus e = SummariseSocketIOStatus(read_threshold, stream_reader.last_status, stream_reader.last_errno);
 
     deserialiser.Deserialise(frame_handler);
-    return true;
+    return e;
 }

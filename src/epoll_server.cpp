@@ -65,50 +65,76 @@ void EpollServer::Loop() {
     log::PrintLn(log::Info, "Exit epoll loop");
 }
 
-void EpollServer::ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready) {
-    size_t num_processed_fd = 0;
-    while (num_processed_fd < num_ready) {
-        num_processed_fd = 0;
-        for (size_t i = 0; i < num_ready; ++i) {
-            auto& ready_event = ready_events[i];
-            const int fd_ready = ready_event.data.fd;
-            if (-1 == fd_ready) {
-                continue;
-            }
+size_t EpollServer::ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready) {
+    size_t num_fd_deserving_another_turn = 0;
 
-            Session* session_ptr = nullptr;
+    for (size_t i = 0; i < num_ready; ++i) {
+        auto& ready_event = ready_events[i];
+        const int fd_ready = ready_event.data.fd;
+        if (-1 == fd_ready) {
+            continue;
+        }
+
+        Session* session_ptr = nullptr;
+        if (fd_listening_ != fd_ready) {
             sessions_.Add(fd_ready, session_ptr);
             assert(session_ptr);
             if (!session_ptr) continue;
+        }
 
-            char events_string[512] = { 0 };
-            EpollEventsToString(ready_event.events, events_string, sizeof(events_string));
-            log::PrintLn(log::Debug, "%d|E|%s", fd_ready, events_string);
+        char events_string[512] = { 0 };
+        EpollEventsToString(ready_event.events, events_string, sizeof(events_string));
+        log::PrintLn(log::Debug, "%d|E|%s", fd_ready, events_string);
 
-            bool is_processed = true;
-            if (fd_listening_ == fd_ready) {
-                OnListenerEvent();
+        bool is_fd_deserve_another_turn = false;
+        if (fd_listening_ == fd_ready) {
+            OnListenerEvent();
+        }
+        else {
+            if (ready_event.events & EPOLLIN) {
+                const SocketIOStatus e = OnReadyToRead(*session_ptr);
+                log::PrintLn(log::Debug, "%d|I|status=%d errno=%d e=%d", fd_ready, session_ptr->socket_reader.last_status, session_ptr->socket_reader.last_errno, e);
+                if (PeerHungUp == e) {
+                    OnHangUp(fd_ready); 
+                }
+                else if (WentThrough == e) {
+                    // Because the current read attempt didn't block, the next attempt might succeed too.
+                    // Deserves another read attempt if this current passed read attempt was not due to trying to read 0 bytes.
+                    if (session_ptr->socket_reader.last_status > 0) {
+                        is_fd_deserve_another_turn = true;
+                    }
+                }
             }
-            else {
-                if (ready_event.events & EPOLLIN) {
-                    is_processed = !OnReadyToRead(*session_ptr);
+            if (ready_event.events & EPOLLOUT) {
+                const SocketIOStatus e = OnReadyToWrite(*session_ptr);
+                log::PrintLn(log::Debug, "%d|O|status=%d errno=%d e=%d", fd_ready, session_ptr->socket_writer.last_status, session_ptr->socket_writer.last_errno, e);
+                if (PeerHungUp == e) {
+                    OnHangUp(fd_ready);    
                 }
-                if (ready_event.events & EPOLLOUT) {
-                    is_processed = !OnReadyToWrite(*session_ptr);
-                }
-                if (ready_event.events & (EPOLLRDHUP | EPOLLHUP)) {
-                    OnHangUp(fd_ready);
-                }
-                if (!(ready_event.events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLHUP))) {
-                    OnUnknownEvent(ready_event);
+                else if (WentThrough == e) {
+                    // Because the current write attempt didn't block, the next attempt might succeed too.
+                    // Deserves another write attempt if there is still data to send.
+                    if (!session_ptr->serialiser.HasSerialisedAll()) {
+                        is_fd_deserve_another_turn = true;
+                    }
                 }
             }
-            if (is_processed) {
-                ready_event.data.fd = -1;
-                ++num_processed_fd;
+            if (ready_event.events & (EPOLLRDHUP | EPOLLHUP)) {
+                OnHangUp(fd_ready);
+            }
+            if (!(ready_event.events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLHUP))) {
+                OnUnknownEvent(ready_event);
             }
         }
+        if (is_fd_deserve_another_turn) {
+            ++num_fd_deserving_another_turn;
+        }
+        else {
+            ready_event.data.fd = -1;
+        }
     }
+    
+    return num_fd_deserving_another_turn;
 }
 
 void EpollServer::OnListenerEvent() {
@@ -133,22 +159,20 @@ void EpollServer::OnListenerEvent() {
     }
 }
 
-bool EpollServer::OnReadyToRead(Session& session) {
-    if (!GetDataThenDeserialise
+SocketIOStatus EpollServer::OnReadyToRead(Session& session) {
+    const SocketIOStatus e = GetDataThenDeserialise
         ( session.deserialiser
         , session.socket_reader
         , session.read_threshold
-        , session.ack_maker_and_serialiser)) {
-        return false;
-    }
+        , session.ack_maker_and_serialiser);
 
     SendPendingMessagesThenSetupRetryAsNeeded(session, epoll_controller_);
-    return true;
+    return e;
 }
 
-bool EpollServer::OnReadyToWrite(Session& session) {
-    SendPendingMessagesThenSetupRetryAsNeeded(session, epoll_controller_);
-    return (session.socket_writer.last_status > 0);
+SocketIOStatus EpollServer::OnReadyToWrite(Session& session) {
+    const SocketIOStatus e = SendPendingMessagesThenSetupRetryAsNeeded(session, epoll_controller_);
+    return e;
 }
 
 void EpollServer::OnHangUp(const int fd) {
@@ -185,10 +209,16 @@ void EpollServer::CloseListeningAndSessionSockets() {
 size_t EpollServer::CloseSessionSockets() {
     struct CloseSocket {
         size_t n_closed ;
-        CloseSocket() : n_closed(0) {}
+        EpollController& epoll_controller;
+        
+        CloseSocket(EpollController& epoll_controller) 
+            : n_closed(0) 
+            , epoll_controller(epoll_controller)
+        {}
 
         bool HandleFdAndSessionPtr(const int /*fd*/, Session* const session_ptr) {
             if ((!session_ptr) || (-1 == session_ptr->fd)) return true;
+            epoll_controller.RemoveFromInterestList(session_ptr->fd);
             const int e = close(session_ptr->fd);
             if (e < 0) {
                 log::PrintLnCurrentErrno(log::Error, "%d|Failed to close accepted", session_ptr->fd);
@@ -200,7 +230,7 @@ size_t EpollServer::CloseSessionSockets() {
             return true;
         }
     };
-    CloseSocket close_socket;
+    CloseSocket close_socket(epoll_controller_);
     sessions_.ForEachDo(close_socket);
     
     return close_socket.n_closed;
@@ -253,8 +283,11 @@ void RunEpollServer(const EpollServerConfig& config) {
     server.Run();
 }
 
-void SendPendingMessagesThenSetupRetryAsNeeded(Session& session, EpollController& epoll_controller) {
+SocketIOStatus SendPendingMessagesThenSetupRetryAsNeeded(Session& session, EpollController& epoll_controller) {
     session.serialiser.Serialise(session.socket_writer, session.write_threshold);
+    
+    const SocketIOStatus e = SummariseSocketIOStatus(session.write_threshold, session.socket_writer.last_status, session.socket_writer.last_errno);
+
     if (session.serialiser.HasSerialisedAll()) {
         // Nothing more to send, no need to watch for EPOLLOUT event anymore.
         epoll_controller.ModifyInterestList(session.fd, 0, EPOLLOUT);
@@ -263,4 +296,6 @@ void SendPendingMessagesThenSetupRetryAsNeeded(Session& session, EpollController
         // Still has things to send, so explicitly register interest in EPOLLOUT and send when we get the EPOLLOUT event.
         epoll_controller.ModifyInterestList(session.fd, EPOLLOUT, 0);
     }
+
+    return e;
 }

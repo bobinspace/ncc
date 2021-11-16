@@ -3,6 +3,7 @@
 #include "config.h"
 #include "session.h"
 #include "epoll_controller.h"
+#include "socket_utils.h"
 
 struct epoll_event;
 
@@ -13,10 +14,10 @@ class EpollServer {
     Sessions sessions_;
     
     void Loop();
-    void ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready);
+    size_t ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready);
     void OnListenerEvent();
-    bool OnReadyToRead(Session&);
-    bool OnReadyToWrite(Session&);
+    SocketIOStatus OnReadyToRead(Session&);
+    SocketIOStatus OnReadyToWrite(Session&);
     void OnHangUp(const int fd);
     void OnUnknownEvent(const epoll_event&);
     
@@ -41,6 +42,6 @@ If after the send attempt, the serialiser doesn't have any more pending data, th
 EPOLLOUT, otherwise we will most likely be unnecessarily flooded with EPOLLOUT events even when we don'
 t have data to write.
 */ 
-void SendPendingMessagesThenSetupRetryAsNeeded(Session& session, EpollController& epoll_controller);
+SocketIOStatus SendPendingMessagesThenSetupRetryAsNeeded(Session& session, EpollController& epoll_controller);
 
 void RunEpollServer(const EpollServerConfig&);
