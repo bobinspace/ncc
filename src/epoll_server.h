@@ -7,28 +7,28 @@
 struct epoll_event;
 
 class EpollServer {
-	EpollController epoll_controller_;
-	int fd_listening_;
-	const EpollServerConfig config_;
-	Sessions sessions_;
-	
-	void Loop();
-	void ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready);
-	void OnListenerEvent();
-	bool OnReadyToRead(Session&);
-	bool OnReadyToWrite(Session&);
-	void OnHangUp(const int fd);
-	void OnUnknownEvent(const epoll_event&);
-	
-	void CloseListeningAndSessionSockets();
-	size_t CloseSessionSockets();
+    EpollController epoll_controller_;
+    int fd_listening_;
+    const EpollServerConfig config_;
+    Sessions sessions_;
+    
+    void Loop();
+    void ProcessReadyEvents(epoll_event* const ready_events, const size_t num_ready);
+    void OnListenerEvent();
+    bool OnReadyToRead(Session&);
+    bool OnReadyToWrite(Session&);
+    void OnHangUp(const int fd);
+    void OnUnknownEvent(const epoll_event&);
+    
+    void CloseListeningAndSessionSockets();
+    size_t CloseSessionSockets();
 
 public:
-	EpollServer(const int fd_listening, const EpollServerConfig&);
-	~EpollServer();
-	void AppendAndSerialiseFrameToAllSessions(char const* const frame_ptr, const size_t n);
-	
-	void Run();
+    EpollServer(const int fd_listening, const EpollServerConfig&);
+    ~EpollServer();
+    void AppendAndSerialiseFrameToAllSessions(char const* const frame_ptr, const size_t n);
+    
+    void Run();
 };
 
 /*
