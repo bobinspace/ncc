@@ -15,13 +15,21 @@
 #include <thread>
 #include <mutex>
 
+void CloseSocketAndNotifyShouldQuit(int& fd) {
+    close(fd);
+    fd = -1;
+}
+
 bool RunReadLoop(Session& session) {
-    while (GetDataThenDeserialise
+    while (PeerHungUp != GetDataThenDeserialise
         ( session.deserialiser
         , session.socket_reader
         , session.read_threshold
         , session.ack_maker_and_serialiser)) 
     {}
+
+    log::PrintLn(log::Info, "Server hung up, closing socket and exiting read loop.");
+    CloseSocketAndNotifyShouldQuit(session.fd);
 
     return true;
 }
@@ -29,7 +37,11 @@ bool RunReadLoop(Session& session) {
 bool RunWriteLoop(Session& session) {
     while (1) {
         session.serialiser.WaitSerialise(session.socket_writer, session.write_threshold);
-        if (session.socket_writer.last_status <= 0) {
+        const SocketIOStatus e = SummariseSocketIOStatus(session.write_threshold, session.socket_writer.last_status, session.socket_writer.last_errno);
+        log::PrintLn(log::Info, "w:%d max:%d r:%d e:%d", e, session.write_threshold, session.socket_writer.last_status, session.socket_writer.last_errno);
+        if (PeerHungUp == e) {
+            log::PrintLn(log::Info, "Server hung up, closing socket and exiting write loop.");
+            CloseSocketAndNotifyShouldQuit(session.fd);
             return false;
         }
     }
