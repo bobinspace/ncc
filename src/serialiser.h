@@ -99,6 +99,14 @@ struct BooleanConditionVariable {
 class WaitableSerialiser {
     BooleanConditionVariable has_items_;
     Serialiser serialiser_;
+
+    template<typename StreamWriter>
+    size_t SerialiseNoLockUpdateConditionVariable(StreamWriter& stream_writer, const size_t max_bytes_to_serialise) {
+        const size_t num_bytes_serialised = serialiser_.Serialise(stream_writer, max_bytes_to_serialise);
+        has_items_.variable = !serialiser_.HasSerialisedAll();
+        return num_bytes_serialised;
+    }
+
 public:
     WaitableSerialiser() {
         has_items_.variable = false;
@@ -132,10 +140,7 @@ public:
     template<typename StreamWriter>
     size_t Serialise(StreamWriter& stream_writer, const size_t max_bytes_to_serialise) {
         std::lock_guard<std::mutex> lock(has_items_.mutex);
-        const size_t num_bytes_serialised = serialiser_.Serialise(stream_writer, max_bytes_to_serialise);
-        
-        has_items_.variable = !serialiser_.HasSerialisedAll();
-        
+        const size_t num_bytes_serialised = SerialiseNoLockUpdateConditionVariable(stream_writer, max_bytes_to_serialise);
         return num_bytes_serialised;
     }
 
@@ -148,10 +153,7 @@ public:
         has_items_.condition.wait(lock, [&] { return has_items_.variable; });
         // Once has_items_.condition.wait returns, mutex is acquired atomically
 
-        const size_t num_bytes_serialised = serialiser_.Serialise(stream_writer, max_bytes_to_serialise);
-        
-        has_items_.variable = !serialiser_.HasSerialisedAll();
-
+        const size_t num_bytes_serialised = SerialiseNoLockUpdateConditionVariable(stream_writer, max_bytes_to_serialise);
         return num_bytes_serialised;
     }
 };
